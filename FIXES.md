@@ -1,96 +1,86 @@
-# Фикс «дёрганого» движения
+# Why the run screen felt jerky, and what changed
 
-Три независимые причины, все в коде — не в GPS и не в отсутствии интернета.
+Four independent causes, all in the code — not in the GPS and not in the
+network.
 
-## 1. Камера телепортировалась каждые 500 мс
+## 1. The camera teleported every 500 ms
 
-`run_map_screen.dart`, `_followUser()` вызывался из `Timer.periodic(500ms)`:
+`run_map_screen.dart` called `_followUser()` from a `Timer.periodic(500ms)`:
 
 ```dart
 _mapController.move(LatLng(pos.latitude, pos.longitude), 16.5, id: 'follow');
 ```
 
-`move()` в flutter_map — **мгновенный** переход, не анимация. То есть каждые
-полсекунды карта прыгала на сырую GPS-точку, да ещё и на фиксированный зум
-16.5. При точности 10–30 м это десятки пикселей скачка за кадр. Плюс этот же
-код каждые 500 мс **отбирал камеру у пользователя** — сдвинуть карту, чтобы
-посмотреть, куда бежать, было невозможно.
+`move()` in flutter_map is an **instant** jump, not an animation. So twice a
+second the map snapped to the raw GPS fix, at a hard-coded zoom of 16.5. With
+10–30 m of accuracy that is tens of pixels of jump per frame. The same code also
+**stole the camera** twice a second, so panning the map to look ahead was
+impossible.
 
-**Стало:** `Ticker` на 60 Гц, движение через экспоненциальное приближение
-(`k = 0.3`, ограничение 20 Гц), зум остаётся тот, что выбрал пользователь.
-Если камера оказалась не там, куда её поставили (>150 м) — значит пользователь
-сам сдвинул карту: слежение отключается, появляется кнопка «вернуться ко мне».
+**Now:** a `Ticker` at 60 Hz eases the centre towards the smoothed position
+(`k = 0.3`, capped at 20 Hz), and the zoom stays whatever the user chose. If the
+camera ends up somewhere we did not put it (>150 m) the user panned: following
+switches off and a "back to me" button appears.
 
-## 2. В маркер шла сырая GPS-точка
+## 2. The marker was drawn from the raw fix
 
-`run_tracker.dart`: `lastPosition` отдавался в `MarkerLayer` как есть, а поток
-был настроен на `intervalDuration: 3s` и `distanceFilter: 0`. Три секунды между
-фиксами при точности 15–30 м дают дрожание в разы больше реального
-перемещения: стоя на месте, точка гуляла на 10–20 м.
+`run_tracker.dart` handed `lastPosition` to `MarkerLayer` unchanged, while the
+stream ran at `intervalDuration: 3s` with `distanceFilter: 0`. Three seconds
+between fixes at 15–30 m accuracy means the jitter is larger than the movement:
+standing still, the dot wandered 10–20 m.
 
-**Стало:**
+**Now:**
 
-- поток: `intervalDuration: 1s`, `distanceFilter: 2` (больше выборок — есть что
-  сглаживать);
-- `_smooth()` — low-pass с мёртвой зоной 2 м (стоя на месте точка не двигается
-  вообще) и α, зависящей от точности: 0.6 при ≤8 м, 0.4 при ≤15 м, 0.22 при
-  хуже. Реальный скачок >25 м (свежий фикс после потери сигнала) не
-  размазывается, а принимается целиком;
-- маркер, хвост трека (`coveredPoints`) и камера читают `smoothedPosition`.
+- stream at 1 fix/second with `distanceFilter: 2` (more samples to smooth over);
+- `_smooth()` — a low-pass filter with a 2 m deadband (standing still, the dot
+  does not move at all) and an accuracy-dependent α: 0.6 at ≤8 m, 0.4 at ≤15 m,
+  0.22 beyond. A genuine jump >25 m (a fresh fix after losing signal) is accepted
+  outright instead of being smeared;
+- the marker, the track tail (`coveredPoints`) and the camera all read
+  `smoothedPosition`.
 
-## 3. Перерисовка всего экрана на каждый шаг
+## 3. The whole screen rebuilt on every step
 
-`_onSteps` вызывал `_publish()` **на каждый шаг** — это 2–3 полных перестроения
-`FlutterMap` (тайлы + полилинии + маркеры) в секунду, поверх обновлений GPS.
-Отсюда рывки на ровном месте.
+`_onSteps` called `_publish()` on **every step** — two or three full rebuilds of
+`FlutterMap` (tiles + polylines + markers) per second, on top of the GPS
+updates. That is where the stutter came from.
 
-**Стало:** публикация от шагомера троттлится до ~1 раза в 900 мс; тикер
-статистики в экране — 1 с вместо 500 мс.
+**Now:** step-driven publishes are throttled to about once per 900 ms, and the
+stats ticker in the screen runs at 1 s instead of 500 ms.
 
-## 4. Античит удалён целиком
+## 4. Anti-cheat removed entirely
 
-`_updateCheat` и всё вокруг него (`RunPhase.failed`, `CheatReason`,
-`RunModeTuning` с лимитами скорости, счётчики `_overLimitSeconds` /
-`_noStepSeconds`, диалог «КВЕСТ ПРОВАЛЕН») **вырезано**. Забег больше нельзя
-проиграть: GPS врёт, телефон врёт, наказывать за это бегуна — плохая сделка.
+`_updateCheat` and everything around it (`RunPhase.failed`, `CheatReason`,
+`RunModeTuning` speed limits, the `_overLimitSeconds` / `_noStepSeconds`
+counters, the "QUEST FAILED" dialog) are **gone**. A run can no longer be lost:
+GPS lies, phones lie, and punishing the runner for it is a bad trade.
 
-Скорость в HUD осталась медианной (чтобы число не дёргалось), но ни на что не
-влияет. `minMovingKmh` («Мин.» в итогах) считается как раньше.
+Speed in the HUD is still a median (so the number does not flicker) but it no
+longer decides anything. `minMovingKmh` ("Min" in the results) still works.
 
-## Что проверить на телефоне
+## Worth checking on a phone
 
-1. **Стоять на месте минуту** — точка не должна дрожать, скорость ~0.
-2. **Пройти 50 м** — точка должна идти плавно, без рывков.
-3. **Сдвинуть карту во время бега** — она не должна возвращаться сама; кнопка
-   «моё местоположение» возвращает слежение.
-4. **Пробежать короткий маршрут до конца** — после финиша «Забег сохранён в
-   историю», на главной появляется строка «Забегов: 1 · 0.4 км», в истории —
-   сам забег с темпом и шагами.
-5. **Убить приложение и открыть снова** — история на месте (это `runs.json`).
-6. **Очистить историю** — спрашивает подтверждение, после него пусто.
-7. **Режим полёта** — карта будет пустой (тайлы не скачаны), но точка и
-   полилиния должны двигаться плавно.
+1. **Stand still for a minute** — the dot must not shake, speed ~0.
+2. **Walk 50 m** — the dot should move smoothly.
+3. **Pan the map mid-run** — it must not snap back; the "my location" button
+   resumes following.
+4. **Finish a short route** — "Run saved to history", the home screen shows
+   "Runs: 1 · 0.4 km", the finish dialog reports new territory cells.
+5. **Kill the app and reopen** — history and territory survive (`runs.json`,
+   `territory.json`).
+6. **Airplane mode** — the map is blank (no tiles), but a missing tile now gives
+   up in 8 s instead of hanging on the TCP timeout.
 
-## Что НЕ трогал
+## Verification
 
-**Пустую карту без интернета.** Сейчас тайлы идут через
-`NetworkTileProvider` без таймаута: в офлайне каждый отсутствующий тайл висит
-до системного таймаута TCP. Это не блокирует кадры (запросы асинхронные), но
-это грязь — и лечится своим `TileProvider`-обёрткой с коротким таймаутом и
-заглушкой. Не сделал, потому что сначала надо было убедиться, что проект
-вообще собирается. Теперь `flutter analyze` чистый и Flutter под рукой —
-можно делать.
-
-## Статус проверки
-
-Прогнано на Flutter 3.47.9 / Dart 3.13.7:
+On Flutter 3.47.9 / Dart 3.13.7:
 
 ```
-flutter analyze  → No issues found! (ran in 6.2s)
-flutter test     → 19 tests, All tests passed!
+flutter analyze  → No issues found!
+flutter test     → 27 tests, All tests passed!
 ```
 
-По дороге компилятор поймал две настоящие ошибки, обе исправлены:
-`position.accuracy <= 0 ? 999 : ...` давал `num` вместо `double`;
-и digit separators в `tile_prefetch.dart` требовали `sdk: >=3.6.0` в pubspec
-(в восстановленном манифесте стояло `>=3.0.0`).
+The compiler caught two real errors on the way, both fixed:
+`position.accuracy <= 0 ? 999 : ...` produced `num` where `double` was needed,
+and digit separators in `tile_prefetch.dart` required `sdk: >=3.6.0` in the
+pubspec (the recovered manifest said `>=3.0.0`).

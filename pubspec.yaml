@@ -1,5 +1,5 @@
 name: realroute
-description: "RealRoute RPG — беги по реальному миру: маршрут строится по улицам из OpenStreetMap."
+description: "RealRoute RPG — run through the real world: the route is built from real OpenStreetMap streets."
 publish_to: none
 version: 1.0.0+1
 

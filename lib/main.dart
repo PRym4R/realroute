@@ -1,3 +1,5 @@
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -10,6 +12,14 @@ import 'services/territory.dart';
 import 'services/tile_prefetch.dart';
 import 'theme.dart';
 
+/// Saved choice first, then the phone's own language, then English.
+String? _startupLanguage(String? saved) {
+  if (L10n.isSupported(saved)) return saved;
+  final device = ui.PlatformDispatcher.instance.locale.languageCode;
+  if (L10n.isSupported(device)) return device;
+  return null;
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final prefs = await SharedPreferences.getInstance();
@@ -21,8 +31,7 @@ Future<void> main() async {
   await TilePrefetcher.instance.initCache();
   await RunHistory.instance.load();
   await Territory.instance.load();
-  final initial = L10n.isSupported(saved) ? saved! : null;
-  runApp(RealRouteApp(initialLang: initial));
+  runApp(RealRouteApp(initialLang: _startupLanguage(saved)));
 }
 
 class RealRouteApp extends StatefulWidget {
