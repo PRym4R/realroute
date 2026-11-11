@@ -1,0 +1,29 @@
+name: realroute
+description: "RealRoute RPG — беги по реальному миру: маршрут строится по улицам из OpenStreetMap."
+publish_to: none
+version: 1.0.0+1
+
+environment:
+  # digit separators (2_000_000_000 in tile_prefetch) need Dart 3.6+;
+  # this is what the original build must have declared.
+  sdk: ">=3.6.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^2.0.0
+  flutter_map: ^8.3.2
+  geolocator: ^14.1.2
+  http: ^1.6.0
+  latlong2: ^0.10.1
+  path_provider: ^2.1.6
+  pedometer: ^4.2.0
+  shared_preferences: ^2.5.6
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
